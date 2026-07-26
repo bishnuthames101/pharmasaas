@@ -6,7 +6,7 @@ Phase status against the plan in `docs/ARCHITECTURE.md` §9.
 | ----- | ----------------------------------- | ------------------------- |
 | 0     | Scaffold & tooling                  | Done                      |
 | 1     | Tenancy core, RLS foundation, proxy | Done, verified on live DB |
-| 2     | Auth & instant onboarding           | Done, one gap \*\*        |
+| 2     | Auth & instant onboarding           | Done, verified end to end |
 | 3     | Pharmacy schema + business RPCs     | Not started               |
 | 4     | Inventory module                    | Not started               |
 | 5     | Purchases & suppliers               | Not started               |
@@ -144,9 +144,7 @@ separate role-gated table. Documented in `docs/ROLES.md`; needs a decision.
 
 ## Phase 2 — Auth & instant onboarding
 
-**\*\* Status: built and verified at the database layer; one gap.** The signup
-form's final submit has not been observed working end to end in a browser — see
-"Unverified" below.
+**Status: built and verified end to end** against the live database.
 
 ### Migrations
 
@@ -215,12 +213,34 @@ form's final submit has not been observed working end to end in a browser — se
   pharmacy name, and the live availability check round-trips to the database —
   which also demonstrates that server actions work over the wire.
 
-### Unverified
+### End-to-end verification
 
-The **final signup submit** was never observed completing. The first click
-missed (the page scrolled between screenshot and click), and the browser
-extension disconnected before a retry. The underlying sequence is covered by
-the claim-stamping tests, and `checkSlug` proves the server-action transport
-works, so the untested surface is narrow — but it is not zero, and it is the
-single most important path in the product. **Needs one manual click-through, or
-a Playwright suite.**
+The signup and login flows were exercised by posting to the real form endpoints
+(the progressive-enhancement path Next renders for no-JS clients), which drives
+the same server actions a browser does:
+
+| Flow                                    | Result                                          |
+| --------------------------------------- | ----------------------------------------------- |
+| Signup                                  | `303 -> /t/{slug}/dashboard`                    |
+| — tenant, owner membership, settings    | all three created, with phone/address/NPR/13%   |
+| — session cookie                        | carries `app_metadata.tenant_id`                |
+| Dashboard with that session             | `200`, renders name, NPR, 13%, `INV-1`, `owner` |
+| Staff page with that session            | `200`, renders the owner and the add-staff form |
+| Login, correct credentials              | `303 -> /t/{slug}/dashboard`                    |
+| Login, wrong password                   | "Incorrect email or password"                   |
+| Login, unknown account                  | _identical_ message — no email enumeration      |
+| Login, valid account at wrong pharmacy  | "does not have access to Sunrise Pharmacy"      |
+| Signed-in user opening another pharmacy | "No access" page; no settings or staff data     |
+
+In a real browser (before the extension disconnected): the signup page renders,
+the slug auto-derives from the pharmacy name, and the live availability check
+round-trips to the database.
+
+The cross-tenant denial page does name the pharmacy it is refusing access to.
+That is deliberate and not a leak — the public login page at `/t/{slug}/login`
+already shows the same name to anonymous visitors.
+
+### Test data
+
+The throwaway tenants and auth users created during these runs were deleted.
+`sunrise` (active) and `moonlight` (suspended) remain as dev fixtures.

@@ -30,7 +30,13 @@
       "Bash(curl -s -D - -o /dev/null -H \"Host: sunrise.localhost:3000\" http://localhost:3000/)",
       "Bash(node -e ' *)",
       "Bash(git add *)",
-      "Bash(git -c user.name=\"Bishnu Sah\" -c user.email=\"bishnu.sah@thamescollege.edu.np\" commit -q -F -)"
+      "Bash(git -c user.name=\"Bishnu Sah\" -c user.email=\"bishnu.sah@thamescollege.edu.np\" commit -q -F -)",
+      "Bash(curl -s http://localhost:3000/signup)",
+      "Bash(grep -oE '\\\\$ACTION[^\"]*')",
+      "Bash(python -)",
+      "Bash(pnpm format *)",
+      "Bash(pnpm verify *)",
+      "Bash(pnpm test:rls)"
     ]
   }
 }
