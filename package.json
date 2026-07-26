@@ -14,9 +14,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:rls": "vitest run --config vitest.rls.config.ts",
-    "db:push": "supabase db push",
-    "db:diff": "supabase db diff",
-    "db:reset": "supabase db reset --linked",
+    "test:rls-gate": "tsx scripts/verify-rls-gate.ts",
+    "db:push": "tsx scripts/db.ts push",
+    "db:diff": "tsx scripts/db.ts diff",
+    "db:status": "tsx scripts/db.ts list",
     "verify": "pnpm typecheck && pnpm lint && pnpm test"
   },
   "dependencies": {
@@ -36,12 +37,14 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.4",
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.12",
+    "pg": "^8.22.0",
     "prettier": "^3.9.6",
     "prettier-plugin-tailwindcss": "^0.8.1",
     "supabase": "^2.109.1",

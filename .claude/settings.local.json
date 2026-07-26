@@ -21,7 +21,8 @@
       "Bash(curl -s -H \"Host: evil.com\" http://localhost:3000/)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/t/a)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/t/sunrise)",
-      "PowerShell($conns = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; foreach \\($c in $conns\\) { Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue; \"killed PID $\\($c.OwningProcess\\)\" }; Start-Sleep -Seconds 2; if \\(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue\\) { \"PORT STILL BUSY\" } else { \"port 3000 free\" })"
+      "PowerShell($conns = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; foreach \\($c in $conns\\) { Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue; \"killed PID $\\($c.OwningProcess\\)\" }; Start-Sleep -Seconds 2; if \\(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue\\) { \"PORT STILL BUSY\" } else { \"port 3000 free\" })",
+      "Bash(pnpm build *)"
     ]
   }
 }

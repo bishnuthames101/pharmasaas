@@ -2,18 +2,18 @@
 
 Phase status against the plan in `docs/ARCHITECTURE.md` §9.
 
-| Phase | Scope                               | Status                  |
-| ----- | ----------------------------------- | ----------------------- |
-| 0     | Scaffold & tooling                  | Done                    |
-| 1     | Tenancy core, RLS foundation, proxy | Code done, unapplied \* |
-| 2     | Auth & instant onboarding           | Not started             |
-| 3     | Pharmacy schema + business RPCs     | Not started             |
-| 4     | Inventory module                    | Not started             |
-| 5     | Purchases & suppliers               | Not started             |
-| 6     | POS & sales                         | Not started             |
-| 7     | Customers, prescriptions, reports   | Not started             |
-| 8     | Platform admin                      | Not started             |
-| 9     | Hardening & deploy                  | Not started             |
+| Phase | Scope                               | Status                    |
+| ----- | ----------------------------------- | ------------------------- |
+| 0     | Scaffold & tooling                  | Done                      |
+| 1     | Tenancy core, RLS foundation, proxy | Done, verified on live DB |
+| 2     | Auth & instant onboarding           | Not started               |
+| 3     | Pharmacy schema + business RPCs     | Not started               |
+| 4     | Inventory module                    | Not started               |
+| 5     | Purchases & suppliers               | Not started               |
+| 6     | POS & sales                         | Not started               |
+| 7     | Customers, prescriptions, reports   | Not started               |
+| 8     | Platform admin                      | Not started               |
+| 9     | Hardening & deploy                  | Not started               |
 
 ## Decisions log
 
@@ -59,11 +59,41 @@ Supabase server/admin clients.
 
 ## Phase 1 — Tenancy core & RLS foundation
 
-**\* Status:** all code and migrations are written, typechecked and linted, but
-**not yet applied to a database**, and the RLS suite has therefore **never been
-executed**. Until `pnpm db:push` runs against a real Supabase project and
-`pnpm test:rls` passes, the isolation guarantees below are designed but
-unverified. This is the gating item for Phase 2.
+**Status: applied and verified** against the live Supabase project
+(`sohbmvmlxpuwnoksctko`, ap-southeast-1) on 2026-07-26.
+
+- `pnpm db:push` — both migrations applied.
+- `pnpm test:rls` — 15/15 passing, including every cross-tenant probe.
+- `pnpm test:rls-gate` — the coverage gate provably fires on all four failure
+  modes (see below).
+- End-to-end: `/t/sunrise` and `sunrise.localhost:3000` render the pharmacy
+  name from the database; a suspended tenant shows the notice instead of data;
+  an unknown slug 404s; and the anon key is refused on `public.tenants`.
+
+### Connection note
+
+`supabase link` was avoided — it requires a dashboard access token, whereas the
+database password alone is enough. Migrations run through `scripts/db.ts`, which
+supplies `--db-url` from `.env.local`. The connection **must** use the
+session-mode pooler (`aws-0-ap-southeast-1.pooler.supabase.com:5432`): the
+direct host `db.<ref>.supabase.co` publishes only an AAAA record and does not
+resolve on this IPv4-only network.
+
+### The gate is proven, not assumed
+
+`scripts/verify-rls-gate.ts` creates four deliberately broken tables, asserts
+each is reported, then drops them:
+
+| Probe                            | Expected report           |
+| -------------------------------- | ------------------------- |
+| RLS never enabled                | `rls_disabled`            |
+| Enabled but not forced           | `rls_not_forced`          |
+| Forced but no policy             | `no_policies`             |
+| `using (auth.uid() is not null)` | `no_tenant_scoped_policy` |
+
+The last is the one that matters: a policy that looks protective, passes review,
+and grants every authenticated user on the platform access to every pharmacy.
+The gate catches it.
 
 Done:
 
