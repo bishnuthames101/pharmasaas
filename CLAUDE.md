@@ -50,6 +50,19 @@ project (Postgres, Auth, Storage) · Tailwind v4 · Vercel via GitHub · pnpm
 - Sales allocate stock FEFO (earliest expiry first, expired excluded) via the
   `fefo_allocate` / `complete_sale` RPCs using `FOR UPDATE SKIP LOCKED` —
   never decrement stock from JS.
+- **Cost lives in `batch_costs`, never on `batches` or `sale_items`.** RLS
+  filters rows, not columns, so cost can only be hidden from cashiers by
+  living in its own role-gated table. Profit is computed by joining
+  `sale_items → batches → batch_costs` at report time, never snapshotted.
+- **The mutating RPCs are `SECURITY DEFINER`** (`complete_sale`,
+  `receive_purchase`, `sales_return`, `adjust_stock`, `fefo_allocate`), so
+  cashiers need no direct write rights on `batches`. This means RLS is OFF
+  inside them: every one must call `public.require_tenant_role(...)` and
+  constrain every id it is passed with `and tenant_id = v_tenant`. Adding an
+  unfiltered query there is a cross-tenant write.
+- `sales` and `sale_items` have **no insert/update/delete policy at all** —
+  every sale must go through `complete_sale` so it cannot skip invoice
+  numbering, FEFO, or the controlled register.
 - Invoice numbers: per-tenant gapless sequence in `settings.next_invoice_seq`,
   incremented under a row lock. Never a global sequence.
 - `is_prescription_required` and `is_controlled` flags on medicines;

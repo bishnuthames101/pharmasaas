@@ -7,7 +7,7 @@ Phase status against the plan in `docs/ARCHITECTURE.md` §9.
 | 0     | Scaffold & tooling                  | Done                      |
 | 1     | Tenancy core, RLS foundation, proxy | Done, verified on live DB |
 | 2     | Auth & instant onboarding           | Done, verified end to end |
-| 3     | Pharmacy schema + business RPCs     | Not started               |
+| 3     | Pharmacy schema + business RPCs     | Done, verified on live DB |
 | 4     | Inventory module                    | Not started               |
 | 5     | Purchases & suppliers               | Not started               |
 | 6     | POS & sales                         | Not started               |
@@ -244,3 +244,76 @@ already shows the same name to anonymous visitors.
 
 The throwaway tenants and auth users created during these runs were deleted.
 `sunrise` (active) and `moonlight` (suspended) remain as dev fixtures.
+
+## Phase 3 — Pharmacy schema & business RPCs
+
+**Status: applied and verified.** `pnpm test:rls` is **75/75**;
+`pnpm test:rls-gate` still fires on all four failure modes.
+
+### Migrations
+
+- `20260727000100_policy_helper.sql` — `apply_tenant_policies()`, which
+  generates the standard four policies from the role matrix. Thirteen tables of
+  hand-written policies is exactly where a missing `tenant_id` comparison
+  hides; generating them means every table gets the same reviewed expression.
+- `20260727000200_domain_schema.sql` — 13 tables, composite `(tenant_id, …)`
+  indexes throughout, a partial FEFO index, and a GIN full-text index across
+  brand + generic + composition.
+- `20260727000300_business_rpcs.sql` — `fefo_preview`, `fefo_allocate`,
+  `complete_sale`, `receive_purchase`, `sales_return`, `adjust_stock`.
+- `20260727000400_storage.sql` — private `tenant-files` bucket with
+  path-prefix policies.
+
+### The two structural decisions
+
+**1. Cost moved to its own table.** RLS filters rows, not columns, and everyone
+connects as the same `authenticated` Postgres role — so with `cost_price` on
+`batches` (which cashiers must read to sell) any cashier could read margins
+off the API regardless of the UI. Cost now lives in `batch_costs`, gated to
+owner and pharmacist. Cost is deliberately _not_ snapshotted onto `sale_items`
+either, since that would reintroduce the leak; profit joins through to
+`batch_costs` at report time, which is accurate because a batch's cost is fixed
+at receipt.
+
+**2. Mutating RPCs are `SECURITY DEFINER`.** Keeping them invoker-rights would
+have required cashiers to hold `UPDATE` on `batches`, which via PostgREST also
+lets them rewrite selling prices and invent stock — selling and repricing would
+have become one privilege. Instead the RPCs run as definer, `batches` has no
+cashier write policy, and `sales`/`sale_items` have **no write policy at all**,
+so no sale can skip invoice numbering, FEFO, or the controlled register.
+
+The obligation: RLS is off inside those functions, so each derives the tenant
+from `tenant_id()`, re-verifies membership via `require_tenant_role()`, and
+constrains every id with `and tenant_id = v_tenant`. The coverage gate cannot
+see inside a function body — `supabase/tests/domain-rpcs.test.ts` is what does.
+
+### Verified behaviour
+
+- **Cost isolation** — owner reads cost, cashier gets zero rows, cashier can
+  still read the batch itself to sell.
+- **FEFO** — earliest expiry first, spans batches, excludes expired stock,
+  never sees another pharmacy's stock.
+- **Sales** — correct decrement, `INV-n` numbering that is consecutive and
+  per-pharmacy, 13% exclusive tax arithmetic, controlled register written,
+  prescription-only items blocked without a prescription.
+- **Price integrity** — a payload naming its own `unit_price` is ignored; price
+  always comes from the batch, so a cashier cannot sell to a friend for nothing.
+- **Gapless numbering** — a failed sale leaves `next_invoice_seq` untouched, so
+  the invoice book has no holes.
+- **Tenant confinement of the definer functions** — selling another pharmacy's
+  medicine, attaching another pharmacy's customer, adjusting another pharmacy's
+  batch, and returning against another pharmacy's sale are each refused.
+- **Role gates** — cashiers cannot receive goods, adjust stock, or process
+  returns; a direct `sales` insert is refused even for an owner; a cashier's
+  direct edit of `qty_available` and `selling_price` changes nothing.
+- **Concurrency** — two tills each attempting 7 units of a 10-unit batch:
+  exactly one succeeds, 3 remain. Without `FOR UPDATE` both would have sold.
+- **Storage** — upload under another tenant's prefix refused, cross-tenant
+  download/list/delete refused, and crucially **signing a URL for another
+  pharmacy's file is refused**, since a signed URL bypasses RLS once issued.
+
+### Deliberately deferred
+
+Supplier payments and the reorder report are Phase 5; profit reporting views are
+Phase 7. `receive_purchase` takes the latest cost for a topped-up batch rather
+than a weighted average — a batch is one physical lot, so its cost rarely moves.

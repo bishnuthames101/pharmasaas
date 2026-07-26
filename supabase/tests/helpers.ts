@@ -106,6 +106,147 @@ export async function createUser(
   return { user, email, password, client };
 }
 
+export interface SeededPharmacy {
+  tenant: TestTenant;
+  owner: TestUser;
+  pharmacist: TestUser;
+  cashier: TestUser;
+}
+
+/**
+ * A pharmacy provisioned the way signup does it, with one user per role.
+ *
+ * Uses `provision_tenant` rather than raw inserts so the settings row (and
+ * therefore the invoice counter) exists, which every sale depends on.
+ */
+export async function seedPharmacy(label: string): Promise<SeededPharmacy> {
+  const slug = `dom-${label}-${randomUUID().slice(0, 8)}`;
+  const ownerEmail = `owner-${randomUUID()}@example.test`;
+  const password = `Pw-${randomUUID()}`;
+
+  const { data: createdOwner, error: ownerError } =
+    await admin.auth.admin.createUser({
+      email: ownerEmail,
+      password,
+      email_confirm: true,
+    });
+  if (ownerError) throw new Error(`seed owner failed: ${ownerError.message}`);
+
+  const { data: provisioned, error: provisionError } = await admin.rpc(
+    'provision_tenant',
+    {
+      p_slug: slug,
+      p_name: `Test ${label}`,
+      p_owner_id: createdOwner.user!.id,
+    },
+  );
+  if (provisionError) {
+    throw new Error(`provision failed: ${provisionError.message}`);
+  }
+
+  const tenant: TestTenant = {
+    id: (provisioned as { id: string }).id,
+    slug,
+    name: `Test ${label}`,
+  };
+
+  // The owner already has a membership from provisioning, so stamp and sign in
+  // rather than going through createUser (which would insert a second row).
+  await admin.auth.admin.updateUserById(createdOwner.user!.id, {
+    app_metadata: { tenant_id: tenant.id },
+  });
+
+  const ownerClient = createClient(url!, anonKey!, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { error: signInError } = await ownerClient.auth.signInWithPassword({
+    email: ownerEmail,
+    password,
+  });
+  if (signInError)
+    throw new Error(`seed sign-in failed: ${signInError.message}`);
+
+  return {
+    tenant,
+    owner: {
+      user: createdOwner.user!,
+      email: ownerEmail,
+      password,
+      client: ownerClient,
+    },
+    pharmacist: await createUser(tenant, 'pharmacist'),
+    cashier: await createUser(tenant, 'cashier'),
+  };
+}
+
+/** Create a medicine directly (bypassing RLS) and return its id. */
+export async function seedMedicine(
+  tenant: TestTenant,
+  overrides: Record<string, unknown> = {},
+): Promise<string> {
+  const { data, error } = await admin
+    .from('medicines')
+    .insert({
+      tenant_id: tenant.id,
+      name: `Med ${randomUUID().slice(0, 6)}`,
+      units_per_pack: 10,
+      ...overrides,
+    })
+    .select('id')
+    .single();
+
+  if (error) throw new Error(`seedMedicine failed: ${error.message}`);
+  return data!.id as string;
+}
+
+/**
+ * Create a batch with a given expiry and quantity.
+ * `daysToExpiry` may be negative to produce already-expired stock.
+ */
+export async function seedBatch(
+  tenant: TestTenant,
+  medicineId: string,
+  opts: {
+    qty: number;
+    daysToExpiry: number;
+    sellingPrice?: number;
+    costPrice?: number;
+    batchNo?: string;
+  },
+): Promise<string> {
+  const expiry = new Date();
+  expiry.setDate(expiry.getDate() + opts.daysToExpiry);
+
+  const { data, error } = await admin
+    .from('batches')
+    .insert({
+      tenant_id: tenant.id,
+      medicine_id: medicineId,
+      batch_no: opts.batchNo ?? `B-${randomUUID().slice(0, 6)}`,
+      expiry_date: expiry.toISOString().slice(0, 10),
+      qty_available: opts.qty,
+      selling_price: opts.sellingPrice ?? 100,
+    })
+    .select('id')
+    .single();
+
+  if (error) throw new Error(`seedBatch failed: ${error.message}`);
+  const batchId = data!.id as string;
+
+  await admin.from('batch_costs').insert({
+    batch_id: batchId,
+    tenant_id: tenant.id,
+    cost_price: opts.costPrice ?? 60,
+  });
+
+  return batchId;
+}
+
+/** Tear down a seeded pharmacy and all three of its users. */
+export async function cleanupPharmacy(p: SeededPharmacy) {
+  await cleanup([p.tenant], [p.owner, p.pharmacist, p.cashier]);
+}
+
 /** Remove every fixture created by a run. Safe to call more than once. */
 export async function cleanup(tenants: TestTenant[], users: TestUser[]) {
   for (const user of users) {

@@ -25,7 +25,7 @@ the UI is only there so people aren't shown buttons that will fail.
 | Medicines (catalogue)   | RWD   | RW         | R       | Cashiers search to sell; cannot edit.        |
 | Medicine pricing & tax  | RW    | RW         | R       | Selling price and tax rate.                  |
 | Batches                 | RWD   | RW         | R       | Created on goods receipt.                    |
-| Batch cost price        | R     | R          | —       | See "Cost visibility" below.                 |
+| Batch cost price        | R     | R          | —       | Own table `batch_costs`; RLS-enforced.       |
 | Stock adjustments       | RWD   | RW         | —       | Reason-coded; always audit-logged.           |
 | Suppliers               | RWD   | RW         | —       |                                              |
 | Purchases (GRN)         | RWD   | RW         | —       | Via `receive_purchase`.                      |
@@ -76,20 +76,42 @@ Two rules that are not negotiable:
 - Helper calls are wrapped as `(select public.tenant_id())` so Postgres
   evaluates them once per statement rather than once per row.
 
-## Cost visibility — an open decision
+## Cost visibility — resolved in Phase 3
 
-RLS filters **rows**, not **columns**. Because `cost_price` currently lives on
-`batches`, and cashiers must read `batches` to sell (they need `selling_price`,
-expiry, and quantity), a cashier can read `cost_price` through the API even
-though the UI never shows it. Column-level `GRANT`s cannot fix this: every user
-connects as the same Postgres role (`authenticated`), and the pharmacy role is
-application data, not a database role.
+RLS filters **rows**, not **columns**, and every user connects as the same
+Postgres role (`authenticated`), so column-level `GRANT`s cannot tell a cashier
+from an owner. While `cost_price` lived on `batches` — a table cashiers _must_
+read to sell, since they need price, expiry, and quantity — any cashier could
+read the pharmacy's margins straight off the API no matter what the UI rendered.
 
-If margins must be genuinely hidden from counter staff, the fix is to move cost
-into a separate `batch_costs` table carrying its own role-gated policy. That is
-a deliberate schema change and is flagged for a decision in Phase 3 rather than
-assumed here.
+**Cost now lives in `public.batch_costs`**, keyed by `batch_id`, with a policy
+restricting it to `owner` and `pharmacist`. The role gate is now a row filter,
+which is something Postgres can actually enforce.
 
-Until then: treat `cost_price` as visible to all staff of a pharmacy, and gate
-**profit reporting** — the aggregate that actually matters commercially — to
-owners via RPC.
+Cost is therefore never snapshotted onto `sale_items` either — that would
+reintroduce the same leak on a table cashiers can read. Profit is computed at
+report time by joining `sale_items → batches → batch_costs`, which is accurate
+because a batch's cost is fixed when it is received.
+
+The price of the split is one extra join in profit reporting. That is a good
+trade for a control that holds.
+
+## Why the write RPCs are `SECURITY DEFINER`
+
+Keeping the business RPCs `SECURITY INVOKER` would require the caller to hold
+write rights on every table they touch. A cashier completing a sale would then
+need `UPDATE` on `batches` — which through PostgREST also lets them rewrite
+selling prices and invent stock. Selling and repricing would collapse into one
+privilege.
+
+So the mutating RPCs run `SECURITY DEFINER`, `batches` carries no cashier write
+policy, and `sales` / `sale_items` carry **no write policy at all**. Stock can
+only move through the audited RPC path, and every sale is guaranteed an invoice
+number, FEFO allocation, and a controlled-register entry.
+
+The obligation this creates: RLS does **not** apply inside those functions, so
+each must derive the tenant from `public.tenant_id()`, re-verify membership via
+`public.require_tenant_role()`, and constrain every id it is passed with
+`and tenant_id = v_tenant`. A missing predicate there is a cross-tenant write
+that the coverage gate cannot see. `supabase/tests/domain-rpcs.test.ts` probes
+exactly this.
