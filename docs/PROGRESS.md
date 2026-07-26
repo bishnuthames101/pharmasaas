@@ -6,7 +6,7 @@ Phase status against the plan in `docs/ARCHITECTURE.md` §9.
 | ----- | ----------------------------------- | ------------------------- |
 | 0     | Scaffold & tooling                  | Done                      |
 | 1     | Tenancy core, RLS foundation, proxy | Done, verified on live DB |
-| 2     | Auth & instant onboarding           | Not started               |
+| 2     | Auth & instant onboarding           | Done, one gap \*\*        |
 | 3     | Pharmacy schema + business RPCs     | Not started               |
 | 4     | Inventory module                    | Not started               |
 | 5     | Purchases & suppliers               | Not started               |
@@ -141,3 +141,86 @@ any staff member of a pharmacy, including cashiers, because they must read
 `batches` to sell. Column `GRANT`s cannot help — everyone connects as the same
 `authenticated` Postgres role. Fixing it properly means moving cost into a
 separate role-gated table. Documented in `docs/ROLES.md`; needs a decision.
+
+## Phase 2 — Auth & instant onboarding
+
+**\*\* Status: built and verified at the database layer; one gap.** The signup
+form's final submit has not been observed working end to end in a browser — see
+"Unverified" below.
+
+### Migrations
+
+- `20260726000300_onboarding.sql` — `settings` (owner-writable, all-staff
+  readable, no insert/delete policy at all), `reserved_slugs`,
+  `slug_available()`, and `provision_tenant()`.
+- `20260726000400_auth_admin_helpers.sql` — `user_id_by_email()` and
+  `revoke_user_sessions()`, both service-role only.
+
+### Flows
+
+- **Signup** — pharmacy name, live-checked slug, owner email and password.
+  Creates the auth user, then calls `provision_tenant`, which inserts tenant +
+  owner membership + settings in one transaction. If provisioning fails the
+  just-created auth user is deleted, so a failed signup cannot leave an orphan
+  who can sign in but belongs to nothing.
+- **Tenant login** (`/t/{slug}/login`) — verifies active membership in _this_
+  pharmacy after the password check, and restamps the JWT claim when a member
+  arrives with a token pointed at a different pharmacy.
+- **Global login** (`/login`) — one pharmacy goes straight there, several go to
+  `/choose-pharmacy`, none signs back out.
+- **Tenant switcher** — re-checks membership server-side before restamping.
+- **Staff management** — owner adds staff with an initial password, and
+  activates/deactivates them.
+
+### Decisions
+
+1. **Email confirmation is off; accounts are created confirmed.** Supabase's
+   built-in mailer is rate limited to a handful of messages an hour and is not
+   deliverable to arbitrary domains without custom SMTP. Custom SMTP is a
+   Phase 9 deploy task.
+2. **Staff get a password from the owner, not an emailed invite.** For the same
+   deliverability reason, and because counter staff frequently have no work
+   email at all. An invitation flow that depends on inbox access would not work
+   in an actual pharmacy. `inviteUserByEmail` stays available for later.
+3. **Sign-in errors do not distinguish "no such account" from "wrong
+   password"**, so the form cannot be used to enumerate registered emails.
+4. **Session revocation is honest about its limits.** `revoke_user_sessions()`
+   deletes sessions and refresh tokens, so a deactivated user cannot extend
+   their session — but an already-issued access token stays valid until it
+   expires. Write access is cut off immediately regardless, because
+   `tenant_role()` re-reads `tenant_users` instead of trusting the token. This
+   is asserted in the tests.
+5. **`switchTenant` and `setStaffActive` take the `useActionState` signature**
+   rather than being bound directly to `action={}`. A bare `action={fn}` must
+   return `void`, which would have meant discarding their error results.
+
+### Verified
+
+- `pnpm test:rls` — **35/35**, covering: reserved-slug list parity between the
+  database and `subdomain.ts`; `slug_available` rules; `provision_tenant`
+  atomicity and its rejection of tenant-user callers; `settings` cross-tenant
+  isolation and the cashier/owner split; and the admin helpers' access control.
+- **JWT claim staleness**, the subtlest part of the design, is pinned by three
+  tests: a session signed in before stamping sees nothing; stamping _without_
+  refreshing still sees nothing; only after `refreshSession()` does data appear.
+  A fourth forges a claim pointing at a pharmacy the user does not belong to and
+  asserts `tenant_role()` returns null and the write is refused — the claim
+  alone is never sufficient.
+- Route guards over HTTP: `/t/{slug}/dashboard` and `/settings/users` redirect
+  unauthenticated callers to the tenant login; `/choose-pharmacy` redirects to
+  `/login`; suspended tenants show the notice. Redirects are emitted in the
+  correct form for each addressing mode (`/login` on a subdomain, `/t/{slug}/login`
+  on a path).
+- In a real browser: the signup page renders, the slug auto-derives from the
+  pharmacy name, and the live availability check round-trips to the database —
+  which also demonstrates that server actions work over the wire.
+
+### Unverified
+
+The **final signup submit** was never observed completing. The first click
+missed (the page scrolled between screenshot and click), and the browser
+extension disconnected before a retry. The underlying sequence is covered by
+the claim-stamping tests, and `checkSlug` proves the server-action transport
+works, so the untested surface is narrow — but it is not zero, and it is the
+single most important path in the product. **Needs one manual click-through, or
+a Playwright suite.**

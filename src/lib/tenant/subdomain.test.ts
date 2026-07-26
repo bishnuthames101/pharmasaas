@@ -128,4 +128,18 @@ describe('internalPath', () => {
     const tenant = { slug: 'sunrise', source: 'path' } as const;
     expect(internalPath(tenant, '/t/sunrise/pos')).toBe('/t/sunrise/pos');
   });
+
+  it('does not double-prefix an already-prefixed subdomain request', () => {
+    const tenant = { slug: 'sunrise', source: 'subdomain' } as const;
+    expect(internalPath(tenant, '/t/sunrise')).toBe('/t/sunrise');
+    expect(internalPath(tenant, '/t/sunrise/pos')).toBe('/t/sunrise/pos');
+  });
+
+  it('still prefixes a path that merely starts with the slug', () => {
+    const tenant = { slug: 'sunrise', source: 'subdomain' } as const;
+    // `/t/sunrise-annex` is a different tenant, not a sub-path of `sunrise`.
+    expect(internalPath(tenant, '/t/sunrise-annex')).toBe(
+      '/t/sunrise/t/sunrise-annex',
+    );
+  });
 });

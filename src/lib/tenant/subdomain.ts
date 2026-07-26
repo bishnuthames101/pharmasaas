@@ -126,8 +126,17 @@ export function resolveTenant(
  * subdomain-addressed requests get it added.
  */
 export function internalPath(tenant: ResolvedTenant, pathname: string): string {
+  const prefix = `/t/${tenant.slug}`;
+
+  // Already prefixed — either a path-addressed request, or a subdomain request
+  // that followed a redirect written in path form. Prefixing again would
+  // produce `/t/sunrise/t/sunrise/...`, which matches nothing.
+  if (pathname === prefix || pathname.startsWith(`${prefix}/`)) {
+    return pathname;
+  }
+
   if (tenant.source === 'path') return pathname;
 
   const suffix = pathname === '/' ? '' : pathname;
-  return `/t/${tenant.slug}${suffix}`;
+  return `${prefix}${suffix}`;
 }
