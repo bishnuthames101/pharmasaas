@@ -1,20 +1,26 @@
+import { getTenantBySlug } from '@/lib/tenant/lookup';
+
 /**
- * Placeholder tenant entry point. Phase 1 replaces this with the membership
- * guard and Phase 2 with the real dashboard; for now it exists to prove that
- * proxy rewriting resolves the tenant on both addressing modes.
+ * Placeholder tenant entry point. Phase 2 replaces this with the authenticated
+ * dashboard; for now it confirms that slug resolution and the tenant registry
+ * lookup are wired together correctly.
  */
 export default async function TenantHomePage(props: PageProps<'/t/[tenant]'>) {
-  const { tenant } = await props.params;
+  const { tenant: slug } = await props.params;
+
+  // The layout has already established that this resolves; the cache makes the
+  // repeat lookup free.
+  const tenant = await getTenantBySlug(slug);
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-6 py-16">
-      <h1 className="text-2xl font-semibold">Tenant workspace</h1>
+      <h1 className="text-2xl font-semibold">{tenant?.name}</h1>
       <p className="text-muted-foreground">
-        Resolved tenant slug: <code className="font-mono">{tenant}</code>
+        Workspace <code className="font-mono">{slug}</code> · plan status{' '}
+        <code className="font-mono">{tenant?.status}</code>
       </p>
       <p className="text-muted-foreground text-sm">
-        Membership verification, the dashboard, and the rest of the modules
-        arrive in later phases.
+        Sign-in, the dashboard, and the pharmacy modules arrive in later phases.
       </p>
     </main>
   );
