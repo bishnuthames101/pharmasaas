@@ -30,8 +30,12 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files — real values never, the template always
 .env*
+!.env.example
+
+# Claude Code local machine state (permission allowlist, per-checkout)
+.claude/settings.local.json
 
 # vercel
 .vercel
