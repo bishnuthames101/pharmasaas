@@ -1,7 +1,9 @@
 'use server';
 
+import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
+import { clientKey, rateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getTenantBySlug, invalidateTenant } from '@/lib/tenant/lookup';
 import { tenantAbsoluteUrl, tenantHref } from '@/lib/tenant/urls';
@@ -64,6 +66,19 @@ export async function signUpPharmacy(
 
   if (!parsed.success) {
     return { fieldErrors: toFieldErrors(parsed.error) };
+  }
+
+  // Signup creates an auth user and a tenant, so it is the most expensive
+  // unauthenticated endpoint on the platform.
+  const signupLimit = rateLimit(
+    clientKey(await headers(), 'signup'),
+    5,
+    60 * 60 * 1000,
+  );
+  if (!signupLimit.allowed) {
+    return {
+      error: 'Too many attempts. Please try again later.',
+    };
   }
 
   const { pharmacyName, slug, email, password, phone, address } = parsed.data;
@@ -162,6 +177,21 @@ export async function signInToTenant(
 
   if (!parsed.success) {
     return { fieldErrors: toFieldErrors(parsed.error) };
+  }
+
+  // Throttled per address to blunt credential stuffing. See the caveats in
+  // src/lib/rate-limit.ts: this is a speed bump, not a guarantee.
+  const attempt = rateLimit(
+    clientKey(await headers(), `login:${slug}`),
+    10,
+    15 * 60 * 1000,
+  );
+  if (!attempt.allowed) {
+    return {
+      error: `Too many sign-in attempts. Try again in ${Math.ceil(
+        attempt.retryAfterSeconds / 60,
+      )} minute(s).`,
+    };
   }
 
   const tenant = await getTenantBySlug(slug);
@@ -279,6 +309,15 @@ export async function signInGlobal(
 
   if (!parsed.success) {
     return { fieldErrors: toFieldErrors(parsed.error) };
+  }
+
+  const globalAttempt = rateLimit(
+    clientKey(await headers(), 'login'),
+    10,
+    15 * 60 * 1000,
+  );
+  if (!globalAttempt.allowed) {
+    return { error: 'Too many sign-in attempts. Try again shortly.' };
   }
 
   const supabase = await createClient();

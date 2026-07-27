@@ -13,7 +13,7 @@ Phase status against the plan in `docs/ARCHITECTURE.md` §9.
 | 6     | POS & sales                         | Done, verified on live DB |
 | 7     | Customers, prescriptions, reports   | Done, verified on live DB |
 | 8     | Platform admin                      | Done, verified on live DB |
-| 9     | Hardening & deploy                  | Not started               |
+| 9     | Hardening & deploy                  | Done, verified end to end |
 
 ## Decisions log
 
@@ -552,3 +552,65 @@ access, run against the database:
 insert into public.platform_admins (user_id, email, note)
 select id, email, 'founder' from auth.users where email = 'you@example.com';
 ```
+
+## Phase 9 — Hardening & deploy
+
+**Status: complete.** `pnpm verify:all` green: 21 unit, 7 security checks,
+**134 RLS**.
+
+### What the security audit found
+
+`scripts/security-audit.ts` checks invariants that are properties of the whole
+codebase rather than of any one function. On its first run it caught a real
+problem: **Supabase's default privileges had granted `anon` full access to
+every view** created outside `apply_tenant_policies` — the eight reporting and
+inventory views.
+
+That was **not** a live leak, and I verified rather than assumed it: every view
+is `security_invoker`, so reading one re-checks the caller's own privileges
+against the tables beneath, and `anon` has none. All six probed views returned
+`42501 permission denied` with the anon key.
+
+It is fixed anyway (`20260727001200_revoke_anon.sql`, plus `alter default
+privileges` so it cannot recur), because that grant was one forgotten
+`security_invoker = true` away from being a genuine breach.
+
+The audit now checks:
+
+| Check                                       | Why                                   |
+| ------------------------------------------- | ------------------------------------- |
+| Service key only in `env.ts` and `admin.ts` | A leak anywhere else is total         |
+| `admin.ts` imports `server-only`            | Makes a client import a build error   |
+| No RPC receives a tenant id                 | RPCs must derive it from the JWT      |
+| Every table **and view** RLS-protected      | The release gate                      |
+| Every `SECURITY DEFINER` pins `search_path` | Classic escalation route              |
+| `anon` holds no grants in `public`          | Defence in depth                      |
+| Tenant tables indexed on `tenant_id` first  | Or one pharmacy scans everyone's rows |
+
+It also prints every module importing the service-role client (currently six),
+so that list is reviewed rather than growing unnoticed. Reducing it by one:
+signup's slug check now uses the anon client, since `slug_available` is granted
+to `anon` precisely so it needs no elevation.
+
+### Also done
+
+- **Security headers** in `next.config.ts`; `no-store` on everything under
+  `/t/`.
+- **Rate limiting** on signup and both login paths, described honestly as
+  per-instance and in-memory rather than presented as a guarantee.
+- **CI** (`.github/workflows/ci.yml`): static checks, then the security gate,
+  then migrations on `main` behind a required reviewer.
+- **`pnpm seed:demo`** builds a realistic pharmacy — 12 medicines, 2 suppliers,
+  5 customers, ~20 sales, a prescription, a controlled dispensing, an expiry
+  write-off — entirely through the real RPCs, so running it is itself a smoke
+  test.
+- **`docs/DEPLOY.md`** with the full setup and an honest known-gaps list.
+
+### Final smoke test, against the seeded pharmacy
+
+All 11 owner pages 200. Cashier sees the counter and inventory but gets no
+profit section, is refused purchasing, and gets **403 on the CSV export**. Owner
+CSV exports work for both daily and profit. Security headers present. And the
+one that matters: a signed-in owner of one pharmacy opening another's dashboard
+gets "No access" with **zero** medicines and **zero** takings in the response.
+`/admin` returns 404 to a non-admin and 404 from a tenant subdomain.

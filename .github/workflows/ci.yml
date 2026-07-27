@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  # Fast feedback: everything that needs no database.
+  static:
+    name: Typecheck, lint, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm test
+      - run: pnpm build
+        env:
+          # Build-time only: the app never contacts Supabase during `next build`,
+          # but env.ts validates its inputs at import, so they must parse.
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key-000000
+          SUPABASE_SERVICE_ROLE_KEY: placeholder-service-key-000000
+          NEXT_PUBLIC_ROOT_DOMAIN: localhost:3000
+
+  # The release gate. Isolation is this project's entire security model, so a
+  # merge that has not proven it is not a merge we want.
+  security:
+    name: Security audit and RLS suite
+    runs-on: ubuntu-latest
+    # Secrets are unavailable to fork PRs, so this would fail confusingly there.
+    if: github.event.pull_request.head.repo.full_name == github.repository ||
+      github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Security audit
+        run: pnpm audit:security
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+      - name: Prove the RLS gate still fires
+        run: pnpm test:rls-gate
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+      - name: Cross-tenant isolation suite
+        run: pnpm test:rls
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  # Migrations are applied only after both gates pass, and only on main.
+  migrate:
+    name: Apply migrations
+    needs: [static, security]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # Requires a reviewer to approve in GitHub before it runs. Migrations are
+    # append-only and hard to reverse, so a human confirms each production
+    # apply.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:push
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}

@@ -18,7 +18,10 @@
     "db:push": "tsx scripts/db.ts push",
     "db:diff": "tsx scripts/db.ts diff",
     "db:status": "tsx scripts/db.ts list",
-    "verify": "pnpm typecheck && pnpm lint && pnpm test"
+    "verify": "pnpm typecheck && pnpm lint && pnpm test",
+    "verify:all": "pnpm typecheck && pnpm lint && pnpm test && pnpm audit:security && pnpm test:rls",
+    "audit:security": "tsx scripts/security-audit.ts",
+    "seed:demo": "tsx scripts/seed-demo.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.3",
