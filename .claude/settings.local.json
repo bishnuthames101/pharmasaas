@@ -38,7 +38,10 @@
       "Bash(pnpm verify *)",
       "Bash(pnpm test:rls)",
       "Bash(pnpm db:push)",
-      "Bash(pnpm typecheck *)"
+      "Bash(pnpm typecheck *)",
+      "Bash(pnpm test:rls-gate)",
+      "Bash(pnpm typegen *)",
+      "Bash(pnpm lint *)"
     ]
   }
 }

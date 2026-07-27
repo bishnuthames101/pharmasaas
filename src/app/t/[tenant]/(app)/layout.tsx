@@ -53,6 +53,7 @@ export default async function TenantAppLayout(
   const nav = [
     { href: await tenantHref(slug, '/dashboard'), label: 'Dashboard' },
     { href: await tenantHref(slug, '/inventory'), label: 'Inventory' },
+    { href: await tenantHref(slug, '/purchases'), label: 'Purchases' },
     { href: await tenantHref(slug, '/settings/users'), label: 'Staff' },
   ];
 

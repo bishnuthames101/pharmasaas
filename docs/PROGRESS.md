@@ -9,7 +9,7 @@ Phase status against the plan in `docs/ARCHITECTURE.md` §9.
 | 2     | Auth & instant onboarding           | Done, verified end to end |
 | 3     | Pharmacy schema + business RPCs     | Done, verified on live DB |
 | 4     | Inventory module                    | Done, verified in browser |
-| 5     | Purchases & suppliers               | Not started               |
+| 5     | Purchases & suppliers               | Done, verified on live DB |
 | 6     | POS & sales                         | Not started               |
 | 7     | Customers, prescriptions, reports   | Not started               |
 | 8     | Platform admin                      | Not started               |
@@ -385,3 +385,36 @@ Signed in as a real owner and a real cashier against seeded stock:
 That cashier row is the Phase 3 cost decision proving itself through the whole
 stack: RLS returns no `batch_costs` rows, so the column simply has nothing to
 render — the UI is not hiding anything, there is nothing there.
+
+## Phase 5 — Purchases & suppliers
+
+**Status: built and verified.** RLS suite **97/97**.
+
+- `20260727000800_supplier_payments.sql` — `supplier_payments` table,
+  `pay_supplier()` RPC, and the `reorder_report` view.
+- Suppliers list with balances and inline payment; goods receipt (GRN) with
+  per-line pack/unit toggle and a running total to check against the paper
+  invoice; purchase list and detail; reorder report.
+
+### Decisions
+
+- **`supplier_payments` has no insert policy.** A payment row and the balance
+  it settles are written together inside `pay_supplier()`, under a row lock on
+  the supplier. A payment that did not move the balance would make the ledger
+  lie, so there is no path that can produce one.
+- **A negative supplier balance is allowed**, representing an advance or
+  overpayment. Rejecting it would force staff to misrecord real money.
+- **Suggested order quantity tops up to `max_stock`**, not to the minimum.
+  Ordering the bare shortfall puts an item straight back on the reorder list.
+- **`reorder_report` is `security_invoker`**, so the `last_unit_cost` lookup
+  runs under the caller's own RLS. A cashier sees the row with a null cost
+  rather than the pharmacy's buying price — the Phase 3 cost split holding
+  through a report that was not written with it in mind.
+
+### Verified
+
+Ledger arithmetic across receipt and payment (500 owed → 200 paid → 300),
+payment recorded alongside the movement, zero/negative payments rejected,
+cashier refused, another pharmacy's supplier refused and its balance untouched,
+direct inserts refused, reorder quantities topping up to max, expired stock
+excluded from on-hand, and cost nulled for cashiers.
