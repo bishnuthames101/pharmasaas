@@ -12,7 +12,7 @@ Phase status against the plan in `docs/ARCHITECTURE.md` §9.
 | 5     | Purchases & suppliers               | Done, verified on live DB |
 | 6     | POS & sales                         | Done, verified on live DB |
 | 7     | Customers, prescriptions, reports   | Done, verified on live DB |
-| 8     | Platform admin                      | Not started               |
+| 8     | Platform admin                      | Done, verified on live DB |
 | 9     | Hardening & deploy                  | Not started               |
 
 ## Decisions log
@@ -510,3 +510,45 @@ them; `sales_daily` and `medicine_movement` readable by cashiers; cross-tenant
 isolation on every view; and the controlled register tying medicine, quantity,
 customer, prescriber registration number and invoice number together for an
 inspection.
+
+## Phase 8 — Platform admin
+
+**Status: built and verified.** RLS suite **134/134**.
+
+`20260727001100_platform_admin.sql` plus `/admin` on the root domain: tenant
+list with usage stats, and suspend/reactivate.
+
+This is the only surface that legitimately sees across tenants, so it is built
+to fail closed:
+
+- **`platform_admins` has no RLS policies at all.** Not restrictive ones —
+  none. Only the service role can read it, and adding a row takes a migration
+  or the Supabase dashboard. Nobody can promote themselves through the
+  application under any role.
+- **The overview is a service-role-only function, not a view.** A view would
+  become readable the moment someone forgot a policy; a function
+  `authenticated` cannot execute has no such failure mode.
+- **It reports aggregates only** — counts, totals, last-sale date. It does not
+  read anyone's medicines, customers or prescriptions.
+- **Platform status conveys nothing inside a tenant.** It is a separate axis
+  from `tenant_users.role`, so it cannot be used to acquire owner rights in a
+  pharmacy. There is a test that makes a tenant owner a real platform admin and
+  confirms their ordinary session still sees only their own pharmacy.
+- **The guard is re-checked in every server action**, not only in the layout: a
+  layout guard does not protect a server action, which is directly invocable.
+- **A non-admin gets `notFound()`**, not "forbidden" — no reason to confirm the
+  console exists.
+- **`{slug}.domain/admin` cannot reach it.** The proxy rewrites that to
+  `/t/{slug}/admin`, which does not exist.
+- Suspension is audited **into the affected pharmacy's own audit log**, so they
+  can see that it happened and when.
+
+### Manual step to appoint yourself
+
+`platform_admins` is deliberately not writable from the app. To grant yourself
+access, run against the database:
+
+```sql
+insert into public.platform_admins (user_id, email, note)
+select id, email, 'founder' from auth.users where email = 'you@example.com';
+```
