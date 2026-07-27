@@ -36,7 +36,9 @@
       "Bash(python -)",
       "Bash(pnpm format *)",
       "Bash(pnpm verify *)",
-      "Bash(pnpm test:rls)"
+      "Bash(pnpm test:rls)",
+      "Bash(pnpm db:push)",
+      "Bash(pnpm typecheck *)"
     ]
   }
 }

@@ -32,7 +32,16 @@ async function gaps(client: Client): Promise<Gap[]> {
   return rows;
 }
 
-const cases: { name: string; ddl: string; expected: string }[] = [
+interface ProbeCase {
+  name: string;
+  ddl: string;
+  /** Expected gap kind, or null when the probe must NOT be reported. */
+  expected: string | null;
+  /** Teardown statement; defaults to dropping a table of the same name. */
+  drop?: string;
+}
+
+const cases: ProbeCase[] = [
   {
     name: 'gate_probe_no_rls',
     ddl: `create table public.gate_probe_no_rls (
@@ -61,6 +70,25 @@ const cases: { name: string; ddl: string; expected: string }[] = [
           alter table public.gate_probe_no_policy enable row level security;
           alter table public.gate_probe_no_policy force row level security`,
     expected: 'no_policies',
+  },
+  {
+    // Views run with their OWNER's privileges unless security_invoker is set,
+    // so this one would serve every pharmacy's medicines to every caller —
+    // with no error and nothing in the query to suggest anything is wrong.
+    name: 'gate_probe_leaky_view',
+    ddl: `create view public.gate_probe_leaky_view as
+            select id, tenant_id, name from public.medicines`,
+    expected: 'view_not_security_invoker',
+    drop: 'drop view public.gate_probe_leaky_view',
+  },
+  {
+    // The same view done correctly must NOT be reported.
+    name: 'gate_probe_safe_view',
+    ddl: `create view public.gate_probe_safe_view
+            with (security_invoker = true) as
+            select id, tenant_id, name from public.medicines`,
+    expected: null,
+    drop: 'drop view public.gate_probe_safe_view',
   },
   {
     // The dangerous one: RLS on, forced, and a policy that looks reassuring but
@@ -100,21 +128,28 @@ async function main() {
       await client.query(testCase.ddl);
 
       const reported = await gaps(client);
-      const match = reported.find(
-        (g) => g.table_name === testCase.name && g.gap === testCase.expected,
-      );
+      const mine = reported.filter((g) => g.table_name === testCase.name);
 
-      if (match) {
+      if (testCase.expected === null) {
+        // Negative control: a correctly built object must produce no finding,
+        // or the gate would be crying wolf rather than checking anything.
+        if (mine.length === 0) {
+          console.log(`✓ ignored ${testCase.name} (correctly built)`);
+        } else {
+          console.error(`✗ FALSE POSITIVE on ${testCase.name}:`, mine);
+          failures++;
+        }
+      } else if (mine.some((g) => g.gap === testCase.expected)) {
         console.log(`✓ caught ${testCase.name} → ${testCase.expected}`);
       } else {
         console.error(
           `✗ MISSED ${testCase.name}: expected "${testCase.expected}", got`,
-          reported.filter((g) => g.table_name === testCase.name),
+          mine,
         );
         failures++;
       }
 
-      await client.query(`drop table public.${testCase.name}`);
+      await client.query(testCase.drop ?? `drop table public.${testCase.name}`);
     }
 
     const after = await gaps(client);
@@ -127,6 +162,9 @@ async function main() {
   } finally {
     // Best-effort cleanup in case an assertion threw mid-run.
     for (const testCase of cases) {
+      await client
+        .query(`drop view if exists public.${testCase.name}`)
+        .catch(() => {});
       await client
         .query(`drop table if exists public.${testCase.name}`)
         .catch(() => {});

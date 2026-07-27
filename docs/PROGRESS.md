@@ -8,7 +8,7 @@ Phase status against the plan in `docs/ARCHITECTURE.md` §9.
 | 1     | Tenancy core, RLS foundation, proxy | Done, verified on live DB |
 | 2     | Auth & instant onboarding           | Done, verified end to end |
 | 3     | Pharmacy schema + business RPCs     | Done, verified on live DB |
-| 4     | Inventory module                    | Not started               |
+| 4     | Inventory module                    | Done, verified in browser |
 | 5     | Purchases & suppliers               | Not started               |
 | 6     | POS & sales                         | Not started               |
 | 7     | Customers, prescriptions, reports   | Not started               |
@@ -317,3 +317,71 @@ see inside a function body — `supabase/tests/domain-rpcs.test.ts` is what does
 Supplier payments and the reorder report are Phase 5; profit reporting views are
 Phase 7. `receive_purchase` takes the latest cost for a topped-up batch rather
 than a weighted average — a batch is one physical lot, so its cost rarely moves.
+
+## Phase 4 — Inventory module
+
+**Status: built and verified** against the live database. RLS suite **86/86**.
+
+### Migrations
+
+- `20260727000500_inventory_views.sql` — `search_vector` generated column,
+  `medicine_stock` and `batch_expiry_board` views, and the coverage gate
+  extended to cover views.
+- `20260727000600_audit_helper.sql` — `log_audit()`, the only sanctioned way
+  for ordinary CRUD to append to `audit_log`.
+- `20260727000700_medicine_stock_search.sql` — projects `search_vector` through
+  the view (see "Two bugs the smoke test caught").
+
+### The coverage gate now checks views
+
+A view runs with its **owner's** privileges unless created
+`with (security_invoker = true)`. An ordinary view over `medicines` would have
+returned every pharmacy's rows to every caller, with no error and nothing in the
+query to suggest it. That is the same class of failure the gate exists to catch
+and it could not see views. It can now, and `pnpm test:rls-gate` proves it —
+including a **negative control**: a correctly built view must _not_ be reported,
+so the check cannot pass by crying wolf.
+
+### Built
+
+- Inventory list: full-text search over brand/generic/composition/barcode/
+  manufacturer, filters (low, out of stock, controlled, inactive), server-side
+  pagination, saleable vs expired stock shown separately.
+- Medicine create/edit with the unit hierarchy, Rx/controlled flags, tax, min
+  and max levels, rack, barcode.
+- Medicine detail with per-batch view, add-stock (routed through
+  `receive_purchase` so pack conversion and cost recording happen the one way
+  they are meant to), and inline reason-coded adjustments via `adjust_stock`.
+- Expiry board bucketed from `settings.expiry_alert_days`, so a pharmacy that
+  wants 15/45/120 gets it without a code change.
+- Search and filters live in the URL, so "low stock" is bookmarkable, the back
+  button behaves, and it works before hydration.
+
+### Two bugs the smoke test caught
+
+1. **Search silently returned nothing.** The list filters the _view_, and the
+   view did not project `search_vector`, so PostgREST answered
+   `column medicine_stock.search_vector does not exist`. Fixed by a migration —
+   which needed `DROP VIEW` rather than `CREATE OR REPLACE`, since replace may
+   only append columns.
+2. **`.select('a' + 'b')` broke the row types.** supabase-js derives the result
+   type from the select string literal; concatenating widens it to `string` and
+   the row type collapses to `GenericStringError`. Select lists are now single
+   literals, with a comment saying why.
+
+### Verified in the running app
+
+Signed in as a real owner and a real cashier against seeded stock:
+
+| Check                               | Result                                                                                     |
+| ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| Search `amoxicillin` (generic only) | matches that medicine alone                                                                |
+| Filter low / controlled / out       | each returns exactly the right row                                                         |
+| Saleable vs expired split           | 340 saleable, expired counted separately                                                   |
+| Expiry board buckets                | expired / critical / notice correct; 400-day batch excluded                                |
+| **Cashier on medicine detail**      | sees batches and selling price, **no Cost column, no cost value, no Add stock, no Adjust** |
+| Cashier opening `/inventory/new`    | told only owner/pharmacist may edit                                                        |
+
+That cashier row is the Phase 3 cost decision proving itself through the whole
+stack: RLS returns no `batch_costs` rows, so the column simply has nothing to
+render — the UI is not hiding anything, there is nothing there.
