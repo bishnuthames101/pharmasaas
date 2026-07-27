@@ -29,7 +29,14 @@ const admin = createClient(url, serviceKey, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
-const PASSWORD = 'demo-password-123';
+/**
+ * Generated per run rather than hardcoded.
+ *
+ * A constant here would be a published credential: this script lives in the
+ * repository, and the accounts it creates are real accounts on a real project.
+ * The password is printed once at the end instead.
+ */
+const PASSWORD = `demo-${randomUUID().slice(0, 12)}`;
 
 /** A cross-section of what a Nepali community pharmacy actually stocks. */
 const CATALOGUE = [
@@ -467,7 +474,7 @@ Done.
   URL        ${base}
   Owner      ${ownerEmail}
   Cashier    ${cashierEmail}
-  Password   ${PASSWORD}
+  Password   ${PASSWORD}   ← generated for this run, not stored anywhere
 
 Sign in as the cashier to see the counter without cost or margin anywhere.
 `);

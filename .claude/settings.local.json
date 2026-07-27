@@ -43,7 +43,11 @@
       "Bash(pnpm typegen *)",
       "Bash(pnpm lint *)",
       "Bash(pnpm audit:security)",
-      "Bash(pnpm seed:demo demo-pharmacy)"
+      "Bash(pnpm seed:demo demo-pharmacy)",
+      "Bash(xargs wc -l)",
+      "Bash(gh --version)",
+      "Bash(curl -s -o /dev/null -w \"  unauthenticated GET: %{http_code}\\\\n\" https://api.github.com/repos/bishnuthames101/pharmasaas)",
+      "Bash(curl -s https://api.github.com/repos/bishnuthames101/pharmasaas)"
     ]
   }
 }
