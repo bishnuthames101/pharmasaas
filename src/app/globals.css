@@ -45,9 +45,12 @@ body {
 }
 
 /*
- * Receipt printing. The POS prints to 80mm thermal roll by default; A4 is
- * opt-in via a `data-print="a4"` attribute on the invoice root. Screen-only
- * chrome is hidden through `.print-hide`.
+ * Receipt printing. The POS prints to an 80mm thermal roll by default; A4 is
+ * opt-in via `data-print="a4"` on the receipt root. Screen-only chrome is
+ * hidden through `.print-hide`.
+ *
+ * Both sizes share one markup — only width, type size and margins change — so
+ * switching paper neither re-renders nor re-fetches.
  */
 @media print {
   .print-hide {
@@ -58,8 +61,37 @@ body {
     background: #fff;
     color: #000;
   }
+
+  /* Thermal rolls have no physical margin and a fixed narrow width. */
+  #receipt[data-print='thermal'] {
+    width: 72mm;
+    max-width: 72mm;
+    margin: 0;
+    padding: 0;
+    font-size: 9pt;
+    line-height: 1.35;
+  }
+
+  #receipt[data-print='a4'] {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-sans), system-ui, sans-serif;
+    font-size: 11pt;
+  }
+
+  /* Keep a line item and its batch/expiry note on the same page. */
+  #receipt tr {
+    break-inside: avoid;
+  }
 }
 
+/*
+ * `@page` cannot read the element attribute, so the page box is set for the
+ * common case (the roll) and widened for A4 via a body-level class the print
+ * controls toggle.
+ */
 @page {
-  margin: 4mm;
+  margin: 3mm;
 }

@@ -10,7 +10,7 @@ Phase status against the plan in `docs/ARCHITECTURE.md` §9.
 | 3     | Pharmacy schema + business RPCs     | Done, verified on live DB |
 | 4     | Inventory module                    | Done, verified in browser |
 | 5     | Purchases & suppliers               | Done, verified on live DB |
-| 6     | POS & sales                         | Not started               |
+| 6     | POS & sales                         | Done, verified on live DB |
 | 7     | Customers, prescriptions, reports   | Not started               |
 | 8     | Platform admin                      | Not started               |
 | 9     | Hardening & deploy                  | Not started               |
@@ -418,3 +418,45 @@ payment recorded alongside the movement, zero/negative payments rejected,
 cashier refused, another pharmacy's supplier refused and its balance untouched,
 direct inserts refused, reorder quantities topping up to max, expired stock
 excluded from on-hand, and cost nulled for cashiers.
+
+## Phase 6 — POS & sales
+
+**Status: built and verified.** RLS suite **111/111**.
+
+- `20260727000900_pos_search.sql` — `pos_search()` (one round trip returning
+  the medicine, saleable stock and the FEFO batch a sale would draw from) and
+  `sale_receipt()`. Both `security_invoker`, so RLS confines them and neither
+  needs a hand-written tenant predicate.
+- Keyboard-first counter, sales history with date filtering, sale detail,
+  returns, and an 80mm/A4 receipt.
+
+### Design notes
+
+- **The cart sends no prices.** `complete_sale` reads them from the batch, so a
+  tampered client cannot set its own. On-screen totals are an estimate for the
+  customer's benefit and the page says so.
+- **Keyboard-first throughout**: focus starts and returns to search, ↑↓ moves
+  the list, Enter adds, F2 jumps to payment, F4 completes, Esc returns to
+  search. A queue does not wait for a mouse.
+- **A scanned barcode auto-adds** when it matches exactly one item, so a wedge
+  scanner works without any clicking.
+- **Out-of-stock items are shown greyed, not hidden** — hiding them leaves the
+  cashier wondering whether they mistyped.
+- **Search results are derived from the query**, not cleared in an effect. A
+  slow response for an abandoned query no longer matches and is simply never
+  shown, and the lint rule against synchronous setState in effects stays happy.
+- **Batch and expiry print on every receipt line**, which is what a customer
+  needs if that batch is later recalled.
+- **Returns are owner/pharmacist only**; stock goes back to the originating
+  batch, since restocking to "the newest batch" would launder an old batch's
+  expiry onto returned goods.
+
+### Verified
+
+Search by brand, generic and barcode; exact-barcode flagging; FEFO batch and
+saleable quantity returned; **two pharmacies stocking the identical barcode
+still only ever see their own**; out-of-stock shown with a null batch; full
+cycle of sale → receipt (with batch and expiry) → partial return → full return
+with correct status transitions; credit sale adding to the customer's balance;
+a cashier able to see sales but not refund them; and another pharmacy's receipt
+returning null.
