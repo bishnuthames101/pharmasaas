@@ -11,7 +11,7 @@ Phase status against the plan in `docs/ARCHITECTURE.md` §9.
 | 4     | Inventory module                    | Done, verified in browser |
 | 5     | Purchases & suppliers               | Done, verified on live DB |
 | 6     | POS & sales                         | Done, verified on live DB |
-| 7     | Customers, prescriptions, reports   | Not started               |
+| 7     | Customers, prescriptions, reports   | Done, verified on live DB |
 | 8     | Platform admin                      | Not started               |
 | 9     | Hardening & deploy                  | Not started               |
 
@@ -460,3 +460,53 @@ cycle of sale → receipt (with batch and expiry) → partial return → full re
 with correct status transitions; credit sale adding to the customer's balance;
 a cashier able to see sales but not refund them; and another pharmacy's receipt
 returning null.
+
+## Phase 7 — Customers, prescriptions & reports
+
+**Status: built and verified.** RLS suite **125/125**.
+
+- `20260727001000_reports.sql` — `sales_daily`, `sale_profit`,
+  `stock_valuation`, `medicine_movement`, `controlled_register`. All
+  `security_invoker`.
+- Customers with search, credit ledger and settle; prescriptions with
+  browser-to-Storage upload and on-demand signed links; a reports hub with
+  date range; CSV export as a route handler.
+
+### The cost split proving itself again
+
+`sale_profit` joins `sale_items → batches → batch_costs` with an **INNER** join.
+For a cashier that yields no rows at all, which is the intent — a LEFT join
+would have leaked revenue figures with a null margin, which is worse than
+useless because it looks like data. Nothing about the role gate on profit is a
+`WHERE` clause someone can forget: it falls out of where cost lives.
+
+`stock_valuation` behaves the same way. `sales_daily` and `medicine_movement`
+carry no cost and are readable by cashiers, which is correct — takings are not
+secret, margins are.
+
+### Other decisions
+
+- **Profit is net of returns** (`qty - qty_returned`), so a refunded item
+  contributes neither revenue nor cost.
+- **Allergies appear in the customer list**, not just on the record. It is the
+  one field that changes what may safely be dispensed.
+- **Prescription images upload browser → Storage directly.** The path is
+  prefixed with the tenant id, which is what the bucket policy checks, so a
+  rewritten prefix is refused by Postgres. Routing bytes through a server action
+  would double the transfer for no security gain.
+- **Image links are signed on demand and last five minutes.** A prescription
+  scan is a patient record, so no durable link is stored or rendered.
+- **CSV export reads through the caller's session**, so the same RLS that
+  governs the screen governs the file — no service-role shortcut. It emits a BOM
+  and CRLF, because these files are opened in Excel.
+- **`days_of_cover` is null when nothing has sold**, rather than infinity.
+
+### Verified
+
+Margin arithmetic including a partial return (revenue 100, cost 60, profit 40,
+with the returned units contributing nothing); `sale_profit` and
+`stock_valuation` returning **zero rows** to a cashier while a pharmacist reads
+them; `sales_daily` and `medicine_movement` readable by cashiers; cross-tenant
+isolation on every view; and the controlled register tying medicine, quantity,
+customer, prescriber registration number and invoice number together for an
+inspection.
