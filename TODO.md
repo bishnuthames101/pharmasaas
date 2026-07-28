@@ -1,7 +1,7 @@
 # TODO
 
-State as of 2026-07-28. All nine build phases are complete, applied to the live
-Supabase project, and verified — 21 unit tests, 7 security checks, 134 RLS
+State as of 2026-07-28 (settings screen added the same day). All nine build phases are complete, applied to the live
+Supabase project, and verified — 21 unit tests, 7 security checks, 144 RLS
 tests. What follows is everything that is _not_ done, in the order it matters.
 
 Nothing in Part 1 requires code. Parts 2–4 do.
@@ -100,21 +100,19 @@ controlling DNS. Full steps in `docs/DEPLOY.md` §4.
 Things a pharmacy would reasonably expect that are genuinely not built. Ordered
 by how much their absence hurts.
 
-### 2.1 No settings screen — **the most significant omission**
+### 2.1 ~~No settings screen~~ — **done**
 
-The `settings` table exists, is populated at signup, and has an owner-only
-update policy. There is **no page to edit it.** An owner currently cannot change:
+Built and verified in a browser: pharmacy name/address/phone, currency, tax mode
+and rate, invoice prefix, the three expiry thresholds, and the default low-stock
+level. Owner-only to edit, readable by all staff (the POS needs currency and tax
+mode), audit-logged, with `/settings` as a hub and Staff as a tab beside it.
 
-- pharmacy name, address, phone (as shown on receipts)
-- tax rate and tax mode (inclusive/exclusive)
-- invoice prefix
-- expiry alert thresholds — the expiry board reads these, so the buckets are
-  stuck at 30/60/90
-- default low-stock threshold
-
-All of it is editable directly in the Supabase table editor as a stopgap. A
-page at `/settings` wiring these to the existing policy is perhaps an hour's
-work and should probably come before anything else here.
+The invoice counter sits in its own collapsed section and **only moves forward**.
+Going back would reissue numbers already printed on receipts, and
+`unique (tenant_id, invoice_no)` would then fail the next sale at the counter —
+which the suite proves by forcing it and watching a sale fail. The server
+re-reads the current value rather than trusting the form, and refuses a lower
+one even with the browser's `min` attribute stripped.
 
 ### 2.2 Dashboard is a placeholder
 

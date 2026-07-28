@@ -30,6 +30,52 @@ export const admin = createClient(url, serviceKey, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
+/**
+ * Retry a fixture operation through transient infrastructure failures.
+ *
+ * The suite creates a lot of auth users, and Supabase rate limits that. Past a
+ * certain size the run started failing with `fetch failed` — not an assertion
+ * failing, just the API declining to talk to us for a moment.
+ *
+ * This wraps *setup* only. Assertions are never retried: a cross-tenant read
+ * that succeeds on the second attempt is a bug, not a blip, and hiding it would
+ * defeat the point of the suite. A flaky release gate is as useless as one that
+ * does not fire, because people learn to re-run it.
+ */
+async function withRetry<T>(
+  label: string,
+  operation: () => Promise<T>,
+  attempts = 4,
+): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+
+      // Only transport and throttling failures are worth retrying. A constraint
+      // violation or a permission error means the fixture itself is wrong.
+      const transient =
+        /fetch failed|ECONNRESET|ETIMEDOUT|socket hang up|rate limit|429|503|504/i.test(
+          message,
+        );
+      if (!transient || attempt === attempts) break;
+
+      // Exponential backoff: 400ms, 800ms, 1600ms.
+      await new Promise((r) => setTimeout(r, 400 * 2 ** (attempt - 1)));
+    }
+  }
+
+  throw new Error(
+    `${label} failed after ${attempts} attempts: ${
+      lastError instanceof Error ? lastError.message : String(lastError)
+    }`,
+  );
+}
+
 export interface TestUser {
   user: User;
   email: string;
@@ -48,14 +94,16 @@ export interface TestTenant {
 export async function createTenant(label: string): Promise<TestTenant> {
   const slug = `test-${label}-${randomUUID().slice(0, 8)}`;
 
-  const { data, error } = await admin
-    .from('tenants')
-    .insert({ slug, name: `Test ${label}` })
-    .select('id, slug, name')
-    .single();
+  return withRetry(`createTenant(${label})`, async () => {
+    const { data, error } = await admin
+      .from('tenants')
+      .insert({ slug, name: `Test ${label}` })
+      .select('id, slug, name')
+      .single();
 
-  if (error) throw new Error(`createTenant failed: ${error.message}`);
-  return data as TestTenant;
+    if (error) throw new Error(error.message);
+    return data as TestTenant;
+  });
 }
 
 /**
@@ -73,16 +121,18 @@ export async function createUser(
   const email = `rls-${randomUUID()}@example.test`;
   const password = `Pw-${randomUUID()}`;
 
-  const { data: created, error: createError } =
-    await admin.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      app_metadata: { tenant_id: tenant.id },
-    });
+  const user = await withRetry(`createUser(${role})`, async () => {
+    const { data: created, error: createError } =
+      await admin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        app_metadata: { tenant_id: tenant.id },
+      });
 
-  if (createError) throw new Error(`createUser failed: ${createError.message}`);
-  const user = created.user!;
+    if (createError) throw new Error(createError.message);
+    return created.user!;
+  });
 
   const { error: memberError } = await admin
     .from('tenant_users')
@@ -96,12 +146,13 @@ export async function createUser(
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  const { error: signInError } = await client.auth.signInWithPassword({
-    email,
-    password,
+  await withRetry(`signIn(${role})`, async () => {
+    const { error: signInError } = await client.auth.signInWithPassword({
+      email,
+      password,
+    });
+    if (signInError) throw new Error(signInError.message);
   });
-
-  if (signInError) throw new Error(`sign-in failed: ${signInError.message}`);
 
   return { user, email, password, client };
 }
@@ -124,13 +175,18 @@ export async function seedPharmacy(label: string): Promise<SeededPharmacy> {
   const ownerEmail = `owner-${randomUUID()}@example.test`;
   const password = `Pw-${randomUUID()}`;
 
-  const { data: createdOwner, error: ownerError } =
-    await admin.auth.admin.createUser({
-      email: ownerEmail,
-      password,
-      email_confirm: true,
-    });
-  if (ownerError) throw new Error(`seed owner failed: ${ownerError.message}`);
+  const createdOwner = await withRetry(
+    `seedPharmacy(${label}) owner`,
+    async () => {
+      const { data, error } = await admin.auth.admin.createUser({
+        email: ownerEmail,
+        password,
+        email_confirm: true,
+      });
+      if (error) throw new Error(error.message);
+      return data;
+    },
+  );
 
   const { data: provisioned, error: provisionError } = await admin.rpc(
     'provision_tenant',
@@ -159,12 +215,13 @@ export async function seedPharmacy(label: string): Promise<SeededPharmacy> {
   const ownerClient = createClient(url!, anonKey!, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
-  const { error: signInError } = await ownerClient.auth.signInWithPassword({
-    email: ownerEmail,
-    password,
+  await withRetry(`seedPharmacy(${label}) sign-in`, async () => {
+    const { error } = await ownerClient.auth.signInWithPassword({
+      email: ownerEmail,
+      password,
+    });
+    if (error) throw new Error(error.message);
   });
-  if (signInError)
-    throw new Error(`seed sign-in failed: ${signInError.message}`);
 
   return {
     tenant,

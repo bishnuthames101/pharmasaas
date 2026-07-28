@@ -54,9 +54,9 @@ export default async function StaffPage(
   const isOwner = access.role === 'owner';
 
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-8 px-6 py-10">
+    <>
       <div>
-        <h1 className="text-2xl font-semibold">Staff</h1>
+        <h2 className="font-semibold">Staff</h2>
         <p className="text-muted-foreground text-sm">
           Who can sign in to {access.tenant.name}, and what they may do.
         </p>
@@ -102,6 +102,6 @@ export default async function StaffPage(
           Only an owner can add or remove staff.
         </p>
       )}
-    </main>
+    </>
   );
 }

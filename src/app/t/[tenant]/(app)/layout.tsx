@@ -59,7 +59,7 @@ export default async function TenantAppLayout(
     { href: await tenantHref(slug, '/customers'), label: 'Customers' },
     { href: await tenantHref(slug, '/prescriptions'), label: 'Rx' },
     { href: await tenantHref(slug, '/reports'), label: 'Reports' },
-    { href: await tenantHref(slug, '/settings/users'), label: 'Staff' },
+    { href: await tenantHref(slug, '/settings'), label: 'Settings' },
   ];
 
   return (
